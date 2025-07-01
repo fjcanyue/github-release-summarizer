@@ -1,4 +1,4 @@
-# GitHub Release Notes Summarizer
+# GitHub Release Summarizer
 
 一个命令行工具，用于获取 GitHub 仓库的 Release Notes，并利用 AI 模型生成结构清晰、内容简洁的变更总结。
 
@@ -9,8 +9,9 @@
 - **获取 Release Notes**: 从任何公开或私有的 GitHub 仓库中抓取所有发布说明。
 - **版本过滤**: 轻松按版本范围（例如，从起始版本、到结束版本，或在特定区间内）筛选 Release。
 - **AI 驱动的总结**: 自动生成结构化的变更总结，内容分类为新功能、优化改进、Bug 修复和重大变更。
-- **智能长文本处理**: 对于非常长的发布历史，工具会自动将内容分割成小块交由 AI 处理，确保在处理超长上下文时信息不丢失（Map-Reduce 模式）。
+- **智能长文本处理 (Map-Reduce)**: 当 Release Notes 总长度超过预设阈值时，工具会自动将内容分割成小块，先对每个块进行独立总结（Map），然后将这些部分摘要整合起来生成一份最终的、全面的报告（Reduce）。这确保了在处理超长上下文时信息的完整性和总结质量。
 - **灵活的 AI 服务支持**: 兼容任何与 OpenAI API 规范一致的接口，让您可以使用 Gemini、Claude、DeepSeek、豆包或本地模型等多种 AI 服务。
+- **高度可配置**: 支持通过环境变量和命令行参数进行灵活配置。
 
 ## 🚀 安装与配置
 
@@ -19,11 +20,11 @@
 首先，克隆本仓库到您的本地机器：
 
 ```bash
-git clone https://github.com/your-username/github-release-reader.git
-cd github-release-reader
+git clone https://github.com/shenshan-des/github-release-summarizer.git
+cd github-release-summarizer
 ```
 
-然后，使用 `requirements.txt` 文件安装所需的 Python 依赖。`openai` 库是使用 AI 总结功能所必需的。
+然后，使用 `requirements.txt` 文件安装所需的 Python 依赖。
 
 ```bash
 pip install -r requirements.txt
@@ -46,6 +47,10 @@ pip install -r requirements.txt
 - **`OPENAI_API_KEY`**: 您的 AI 服务 API 密钥。
 - **`OPENAI_API_BASE`**: API 的基础 URL。这允许您使用 OpenAI 以外的服务。
 - **`OPENAI_MODEL_NAME`**: 要使用的模型名称。如果未设置，脚本将默认使用 `gpt-4o-mini`。
+
+#### **高级配置 (可选)**
+
+- **`MAX_CHARS_FOR_SINGLE_CALL`**: 触发分块总结的字符数阈值。默认值为 `15000`。如果您的模型支持更长的上下文，可以适当调高此值以减少分块次数。
 
 **设置变量的方法:**
 
@@ -131,4 +136,3 @@ $env:OPENAI_MODEL_NAME="gpt-4-turbo"
 3.  **通过命令行提供所有 AI 参数 (使用自定义服务)**:
     ```bash
     python main.py tailwindlabs/tailwindcss --start v3.4.0 --summarize --ai-api-key "sk-..." --ai-api-base "https://api.groq.com/openai/v1" --model "llama3-70b-8192"
-    ```

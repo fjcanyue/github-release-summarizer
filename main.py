@@ -8,8 +8,9 @@ from openai import OpenAI
 # GitHub API 的基础 URL
 API_URL = "https://api.github.com"
 # 触发分块总结的字符数阈值。保守设置以适应各种模型和prompt。
-# 1 token 约等于 4 个英文字符，15000 字符约等于 3750 tokens，为大多数模型留有充足空间。
-MAX_CHARS_FOR_SINGLE_CALL = 15000
+# 1 token 约等于 4 个英文字符。默认 15000 约等于 3750 tokens。
+# 可通过环境变量 MAX_CHARS_FOR_SINGLE_CALL 进行配置。
+MAX_CHARS_FOR_SINGLE_CALL = int(os.getenv("MAX_CHARS_FOR_SINGLE_CALL", 15000))
 
 
 def get_releases(owner: str, repo: str, token: str) -> list | None:
@@ -96,8 +97,10 @@ def filter_and_collect_releases(
     return release_notes_collection
 
 
-def get_ai_summary(client: OpenAI, model_name: str, prompt: str, content: str) -> str:
-    """通用的 AI 调用函数。"""
+def get_ai_summary(client: OpenAI, model_name: str, prompt: str, content: str, stream: bool = False):
+    """
+    通用的 AI 调用函数，支持流式和非流式两种模式。
+    """
     response = client.chat.completions.create(
         model=model_name,
         messages=[
@@ -105,30 +108,40 @@ def get_ai_summary(client: OpenAI, model_name: str, prompt: str, content: str) -
             {"role": "user", "content": prompt.format(content=content)}
         ],
         temperature=0.5,
+        stream=stream,
     )
-    # print token usage
-    if hasattr(response, "usage"):
-        usage = response.usage
-        print(f"[Token Usage] prompt_tokens: {usage.prompt_tokens}, completion_tokens: {usage.completion_tokens}, total_tokens: {usage.total_tokens}")
-    else:
-        print("[Token Usage] 无法获取 token 使用信息。")
     
-    return response.choices[0].message.content
+    if stream:
+        return (chunk.choices[0].delta.content or "" for chunk in response)
+    else:
+        # print token usage for non-streaming
+        if hasattr(response, "usage"):
+            usage = response.usage
+            print(f"[Token Usage] prompt_tokens: {usage.prompt_tokens}, completion_tokens: {usage.completion_tokens}, total_tokens: {usage.total_tokens}")
+        else:
+            print("[Token Usage] 无法获取 token 使用信息。")
+        return response.choices[0].message.content
 
 
 def process_ai_summarization(api_key: str, api_base_url: str, model_name: str, notes: list[str]):
     """
-    处理 AI 总结的整个流程，包括自动分块。
+    处理 AI 总结的整个流程，包括自动分块和流式输出。
     """
     full_content = "\n\n" + "="*60 + "\n\n".join(notes)
     
     try:
         client = OpenAI(api_key=api_key, base_url=api_base_url)
-        summary = ""
+        
+        # 打印标题
+        print("\n" + "="*60)
+        print(" " * 22 + "AI 生成的发布总结")
+        print("="*60 + "\n")
+
+        summary_stream = None
 
         # 如果内容长度小于阈值，直接进行总结
         if len(full_content) < MAX_CHARS_FOR_SINGLE_CALL:
-            print("\n[*] 内容长度适中，直接进行单次总结...")
+            print(f"[*] 内容长度适中，将直接进行流式总结...")
             print(f"[*] 使用模型: '{model_name}'")
             prompt = """请根据以下提供的多个 GitHub Release 的说明文字，对这些版本更新内容进行全面、清晰的归纳总结。
 
@@ -146,7 +159,7 @@ def process_ai_summarization(api_key: str, api_base_url: str, model_name: str, n
 {content}
 ---
 """
-            summary = get_ai_summary(client, model_name, prompt, full_content)
+            summary_stream = get_ai_summary(client, model_name, prompt, full_content, stream=True)
 
         # 如果内容超长，则进行分块总结（Map-Reduce）
         else:
@@ -169,7 +182,7 @@ def process_ai_summarization(api_key: str, api_base_url: str, model_name: str, n
 
             print(f"[*] 已将内容分割成 {len(chunks)} 个块进行处理。")
             
-            # Map 步骤: 对每个块进行总结
+            # Map 步骤: 对每个块进行总结 (非流式)
             partial_summaries = []
             chunk_prompt = """以下是一系列 GitHub Release 说明文字的一部分。请你只针对当前提供的内容，总结其核心要点，包括新功能、改进和 Bug 修复。
 你的总结将作为后续生成最终报告的素材，因此请确保信息的准确和简洁。
@@ -181,12 +194,13 @@ def process_ai_summarization(api_key: str, api_base_url: str, model_name: str, n
 """
             for i, chunk in enumerate(chunks):
                 print(f"[*] 正在总结第 {i+1}/{len(chunks)} 块...")
-                partial_summary = get_ai_summary(client, model_name, chunk_prompt, chunk)
+                # Map 步骤不需要流式，我们需要完整内容进行 Reduce
+                partial_summary = get_ai_summary(client, model_name, chunk_prompt, chunk, stream=False)
                 partial_summaries.append(partial_summary)
 
-            print("[*] 所有块已总结完毕，正在进行最终汇总...")
+            print("[*] 所有块已总结完毕，正在进行最终汇总和流式输出...")
             
-            # Reduce 步骤: 合并所有部分摘要，生成最终总结
+            # Reduce 步骤: 合并所有部分摘要，生成最终总结 (流式)
             combined_summary = "\n\n---\n\n".join(partial_summaries)
             final_prompt = """你收到了多份关于一个软件版本区间的“部分摘要”。请你将这些摘要整合起来，生成一份单一、连贯、全面的最终总结报告。
 请消除重复信息，并按照以下结构组织最终报告：
@@ -203,14 +217,14 @@ def process_ai_summarization(api_key: str, api_base_url: str, model_name: str, n
 {content}
 ---
 """
-            summary = get_ai_summary(client, model_name, final_prompt, combined_summary)
+            summary_stream = get_ai_summary(client, model_name, final_prompt, combined_summary, stream=True)
 
-        # 打印最终结果
-        print("\n" + "="*60)
-        print(" " * 22 + "AI 生成的发布总结")
-        print("="*60 + "\n")
-        print(summary)
-        print("\n" + "="*60 + "\n")
+        # 处理流式输出
+        if summary_stream:
+            for chunk in summary_stream:
+                print(chunk, end="", flush=True)
+        
+        print("\n\n" + "="*60 + "\n")
 
     except Exception as e:
         print(f"\n[!] AI 总结失败: {e}")
@@ -225,7 +239,7 @@ def print_raw_releases(notes: list[str]):
     print("\n" + "="*60)
     print(" " * 20 + "符合条件的 Release 说明")
     print("="*60)
-    print("\n\n" + "="*60 + "\n\n".join(notes))
+    print("\n\n" + "="*60 + "\n" + "\n\n".join(notes))
 
 
 def main():
