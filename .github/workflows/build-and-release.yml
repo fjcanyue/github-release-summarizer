@@ -55,7 +55,7 @@ jobs:
       run: pip install pyinstaller
 
     - name: Build with PyInstaller
-      run: pyinstaller --onefile main.py
+      run: pyinstaller --onefile main.py --name github-release-summarizer
 
     - name: Upload Release Asset
       uses: actions/upload-release-asset@v1
